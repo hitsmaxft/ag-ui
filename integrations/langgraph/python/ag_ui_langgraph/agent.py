@@ -1163,12 +1163,31 @@ class LangGraphAgent:
             if is_message_content_event and should_emit_messages:
                 # Empty-string deltas are legitimate streaming chunks but
                 # AG-UI's TextMessageContentEvent enforces delta min_length=1.
-                # Swallow them here (no-op): we must not misclassify ``""``
-                # as an end-event (see is_message_content_event above), but
-                # we also can't emit an invalid event. Skipping matches the
-                # prior behaviour for non-empty content and keeps the
-                # in-progress message open for the next delta.
+                # We can't emit the content event, but we still need to declare
+                # the assistant message id on the wire — otherwise a follow-up
+                # TOOL_CALL_START on the same AIMessage id would cite a
+                # parent_message_id the frontend has never seen, and the
+                # default apply would synthesise an empty phantom message.
+                # Emit a TEXT_MESSAGE_START+END pair (no CONTENT) so the id
+                # exists, and only when no message is currently in progress
+                # for this run (an open stream already declared the id).
                 if message_content == "":
+                    if chunk_id and not has_current_stream:
+                        yield self._dispatch_event(
+                            TextMessageStartEvent(
+                                type=EventType.TEXT_MESSAGE_START,
+                                role="assistant",
+                                message_id=chunk_id,
+                                raw_event=event,
+                            )
+                        )
+                        yield self._dispatch_event(
+                            TextMessageEndEvent(
+                                type=EventType.TEXT_MESSAGE_END,
+                                message_id=chunk_id,
+                                raw_event=event,
+                            )
+                        )
                     return
 
                 if bool(current_stream and current_stream.get("id")) == False:
